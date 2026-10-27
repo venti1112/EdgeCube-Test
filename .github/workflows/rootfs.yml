@@ -251,3 +251,4 @@ jobs:
             "dist/SHA256SUMS" \
             "dist/rootfs-info.json" \
             --clobber
+

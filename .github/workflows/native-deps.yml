@@ -156,3 +156,4 @@ jobs:
             "dist/native-deps/$ASSET_NAME" \
             "dist/native-deps/SHA256SUMS" \
             --clobber
+

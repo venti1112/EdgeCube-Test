@@ -201,3 +201,4 @@ jobs:
               --notes-file "$RUNNER_TEMP/release-notes.md" \
               --target "$GITHUB_SHA"
           fi
+
