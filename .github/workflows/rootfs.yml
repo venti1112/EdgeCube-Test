@@ -196,7 +196,9 @@ jobs:
           echo "=== glibc 版本（不能低于 android.yml 的 daemon 构建镜像）==="
           # sed 读完整个输出，避免 head 提前退出在 pipefail 下触发 SIGPIPE。
           sudo chroot "$ROOTFS_DIR" /usr/lib/aarch64-linux-gnu/libc.so.6 | sed -n '1p'
-          sudo du -sh "$ROOTFS_DIR"
+          # -x 只统计 rootfs 自身文件系统：此时 /proc、/sys 已 bind mount 进来，
+          # 遍历 /proc 会读到随时消失的进程 fd 路径，du 会因此报错退出。
+          sudo du -shx "$ROOTFS_DIR"
 
       - name: 打包 tar.zst 与校验和
         run: |
