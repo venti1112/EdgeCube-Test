@@ -36,7 +36,7 @@ val nativeDepsLocalZipEnv = providers.environmentVariable("EDGECUBE_NATIVE_DEPS_
 
 val fetchNativeDeps = tasks.register("fetchNativeDeps") {
     group = "build"
-    description = "下载并校验原生依赖包（proot/busybox/tar/zstd）"
+    description = "下载并校验原生依赖包（proot/busybox/tar/zstd/xz）"
 
     val props = Properties()
     if (nativeDepsPropertiesFile.isFile) {
@@ -105,6 +105,7 @@ val fetchNativeDeps = tasks.register("fetchNativeDeps") {
             "lib__bin__busybox__.so",
             "lib__bin__tar__.so",
             "lib__bin__zstd__.so",
+            "lib__bin__xz__.so",
             "libproot-loader-aarch64-5.1.107-68.so",
         )
         val missing = required.filterNot { File(nativeDepsJniDir, "arm64-v8a/$it").isFile }
@@ -151,7 +152,7 @@ val fetchRootfs = tasks.register("fetchRootfs") {
     outputs.dir(rootfsAssetsDir)
 
     doLast {
-        // 本地覆盖：直接用现成的 tar.zst，便于离线构建与联调
+        // 本地覆盖：直接用现成的 tar.xz，便于离线构建与联调
         if (localAsset != null) {
             if (!localAsset.isFile) {
                 throw GradleException("EDGECUBE_ROOTFS_ASSET 指向的文件不存在：${localAsset.absolutePath}")
@@ -178,7 +179,7 @@ val fetchRootfs = tasks.register("fetchRootfs") {
                 缺少 android/rootfs.properties 中的 repo/tag/asset/sha256/version。
                 请先运行 GitHub Actions 的「构建 rootfs」工作流，
                 再把 Release 资产的 sha256 与版本号填入该文件。
-                （本地联调可用 EDGECUBE_ROOTFS_ASSET 直接指定 tar.zst）
+                （本地联调可用 EDGECUBE_ROOTFS_ASSET 直接指定 tar.xz）
                 """.trimIndent(),
             )
         }
@@ -302,8 +303,8 @@ android {
     }
 
     androidResources {
-        // tar.zst 已经是压缩格式，再压一遍没有收益
-        noCompress += "tar.zst"
+        // tar.xz 已经是压缩格式，再压一遍没有收益
+        noCompress += "tar.xz"
     }
 
     packaging {

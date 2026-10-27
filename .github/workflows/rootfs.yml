@@ -1,9 +1,6 @@
 name: 构建 rootfs
 
-# 构建内置本地环境（Debian 13 trixie arm64 minbase），打包成多种压缩格式做体积对比。
-# 同一份 rootfs 分别以最大压缩率产出 tar.zst / tar.xz / tar.gz / tar.bz2 / tar.lz4 /
-# tar.br / tar.lz / tar.7z，Step Summary 与 rootfs-sizes.tsv 给出排序结果，便于挑选
-# 后续真正进 APK 的格式。rootfs-info.json 记录所有产物及校验和。
+# 构建内置本地环境（Debian 13 trixie arm64 minbase），打包成 APK 资产用的 tar.xz。
 # 产物发布到 GitHub Release；app/android/rootfs.properties 锁定 tag / sha256 / version。
 #
 # 分工（主机侧刻意保持极简）：
@@ -21,6 +18,8 @@ name: 构建 rootfs
 #     apt-get clean / autoremove --purge，并要求 dpkg --audit 无输出。
 #   - chroot 前 bind /proc、/sys：adduser 一类维护脚本离开 /proc 会失败；apt 索引
 #     bind 到 runner 临时目录，rootfs 内不落任何列表文件。
+#   - 压缩用 xz -9e -T0：APK 只带这一个压缩包，体积就是成本。设备侧解压由
+#     bootstrap 里的 xz 完成（native-deps.yml 从源码构建，见 ProotBootstrap.kt）。
 #   - 配置脚本放在 rootfs 的 /tmp 里执行，随打包时的 /tmp 排除项一起留在镜像外。
 #
 # rootfs 默认不在 APK 里解压：首次启动本地服务时由 Kotlin 侧解压到 filesDir，
@@ -48,7 +47,7 @@ permissions:
   contents: write
 
 env:
-  ASSET_BASE: edgecube-rootfs-arm64-v8a
+  ASSET_NAME: edgecube-rootfs-arm64-v8a.tar.xz
 
 jobs:
   rootfs:
@@ -61,10 +60,10 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: 安装 debootstrap 与压缩工具
+      - name: 安装 debootstrap
         run: |
           sudo apt-get update
-          sudo apt-get install -y             debootstrap debian-archive-keyring             zstd xz-utils gzip bzip2 lz4 brotli lzip p7zip-full
+          sudo apt-get install -y debootstrap debian-archive-keyring
 
       - name: debootstrap（arm64 minbase）
         run: |
@@ -85,17 +84,18 @@ jobs:
         run: |
           set -euo pipefail
 
-          sudo mkdir -p "$ROOTFS_DIR/proc" "$ROOTFS_DIR/sys" "$ROOTFS_DIR/var/lib/apt/lists" "$RUNNER_TEMP/apt-lists"
+          sudo mkdir -p "$ROOTFS_DIR/proc" "$ROOTFS_DIR/sys" "$ROOTFS_DIR/var/lib/apt/lists"
           sudo mount --bind /proc "$ROOTFS_DIR/proc"
           sudo mount --bind /sys "$ROOTFS_DIR/sys"
           sudo mount --bind "$RUNNER_TEMP/apt-lists" "$ROOTFS_DIR/var/lib/apt/lists"
 
+          mkdir -p "$RUNNER_TEMP/apt-lists"
           sudo cp /etc/resolv.conf "$ROOTFS_DIR/etc/resolv.conf"
           sudo cp scripts/rootfs/config.sh "$ROOTFS_DIR/tmp/rootfs-config.sh"
 
           sudo chroot "$ROOTFS_DIR" bash /tmp/rootfs-config.sh
 
-      - name: 打包多种压缩格式（全部最大压缩率）与校验和
+      - name: 打包 tar.xz 与校验和
         run: |
           set -euo pipefail
 
@@ -103,90 +103,35 @@ jobs:
           sudo du -shx "$ROOTFS_DIR"
 
           mkdir -p dist
-          TAR_EXCLUDES=(
-            --exclude=./dev
-            --exclude=./proc
-            --exclude=./sys
-            --exclude=./etc/resolv.conf
-            --exclude=./tmp/*
-            --exclude=./var/lib/apt/lists/*
-          )
+          sudo tar --numeric-owner -cpf - \
+            --exclude=./dev \
+            --exclude=./proc \
+            --exclude=./sys \
+            --exclude=./etc/resolv.conf \
+            --exclude='./tmp/*' \
+            --exclude='./var/lib/apt/lists/*' \
+            -C "$ROOTFS_DIR" . |
+            xz -9e -T0 -c > "dist/$ASSET_NAME"
 
-          # 先产出一份未压缩 tar，各格式都吃同一份输入，保证对比公平
-          BASE_TAR="$RUNNER_TEMP/rootfs.tar"
-          sudo tar --numeric-owner -cpf "$BASE_TAR" "${TAR_EXCLUDES[@]}" -C "$ROOTFS_DIR" .
-
-          tar_size=$(stat -c %s "$BASE_TAR")
-          echo "未压缩 tar: $tar_size bytes ($(du -h "$BASE_TAR" | cut -f1))"
-
-          compress_one() {
-            # $1 后缀（不含点）  $2.. 压缩命令（从 stdin 读，输出到 $OUT）
-            local ext="$1"; shift
-            local out="dist/$ASSET_BASE.tar.$ext"
-            echo ">>> 生成 $out"
-            "$@" < "$BASE_TAR" > "$out"
-          }
-
-          # ---- 各格式：能开多大开多大 ----
-          compress_one zst  zstd -19 --ultra -22 -T0 -q
-          compress_one xz   xz -9e -T0
-          compress_one gz    gzip -9 -n -c
-          compress_one bz2   bzip2 -9 -c
-          compress_one lz4   lz4 -12 -q -c
-          compress_one br    brotli -q 11 -c
-          compress_one lz    lzip -9 -c
-          # 7z 不走流式：直接压 tar 文件本身（solid 对单个大 tar 影响不大，默认即可）
-          7z a -t7z -mx=9 -m0=lzma2 "dist/$ASSET_BASE.tar.7z" "$BASE_TAR" >/dev/null
-
-          # 逐个校验和
           cd dist
-          sha256sum "$ASSET_BASE".tar.* | tee SHA256SUMS
-
-          # 体积排行表（升序）
-          echo "format	size_bytes	size_human	sha256" > rootfs-sizes.tsv
-          for f in "$ASSET_BASE".tar.*; do
-            sz=$(stat -c %s "$f")
-            printf '%s	%s	%s	%s\n' \
-              "${f#"$ASSET_BASE".tar.}" "$sz" "$(numfmt --to=iec "$sz")" \
-              "$(sha256sum "$f" | cut -d' ' -f1)" >> rootfs-sizes.tsv
-          done
-          sort -t$'\t' -k2,2n rootfs-sizes.tsv -o rootfs-sizes.tsv
-
-          # 生成汇总 info（所有产物全列进去）
+          sha256sum "$ASSET_NAME" | tee SHA256SUMS
+          cat > rootfs-info.json <<EOF
           {
-            echo '{'
-            echo "  \"version\": \"$ROOTFS_VERSION\","
-            echo '  "suite": "trixie",'
-            echo '  "architecture": "arm64",'
-            echo "  \"uncompressed_tar_bytes\": $tar_size,"
-            echo '  "assets": ['
-            first=1
-            for f in "$ASSET_BASE".tar.*; do
-              [ $first -eq 0 ] && echo ','
-              first=0
-              sz=$(stat -c %s "$f")
-              printf '    {"format": "%s", "file": "%s", "bytes": %s, "sha256": "%s"}' \
-                "${f#"$ASSET_BASE".tar.}" "$f" "$sz" "$(sha256sum "$f" | cut -d' ' -f1)"
-            done
-            echo
-            echo '  ]'
-            echo '}'
-          } > rootfs-info.json
-
-          ls -lh "$ASSET_BASE".tar.*
-
+            "version": "$ROOTFS_VERSION",
+            "suite": "trixie",
+            "architecture": "arm64",
+            "asset": "$ASSET_NAME",
+            "sha256": "$(cut -d' ' -f1 SHA256SUMS)"
+          }
+          EOF
+          ls -lh "$ASSET_NAME"
           {
-            echo "### rootfs 已生成（多格式对比，未压缩 tar：$(numfmt --to=iec "$tar_size")）"
+            echo "### rootfs 已生成"
             echo
             echo "- 标签：\`$RELEASE_TAG\`"
             echo "- 版本：\`$ROOTFS_VERSION\`（Debian trixie arm64 minbase）"
-            echo
-            echo "| 格式 | 大小 | 相比未压缩 | SHA256 |"
-            echo "| --- | ---: | ---: | --- |"
-            tail -n +2 rootfs-sizes.tsv | while IFS=$'\t' read -r fmt sz human sha; do
-              pct=$(awk -v a="$sz" -v b="$tar_size" 'BEGIN{printf "%.1f%%", 100*a/b}')
-              echo "| $fmt | $human | $pct | \`${sha:0:16}…\` |"
-            done
+            echo "- 文件：\`$ASSET_NAME\`"
+            echo "- SHA256：\`$(cut -d' ' -f1 SHA256SUMS)\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: 上传 Actions 产物
@@ -210,4 +155,8 @@ jobs:
               --notes "Debian trixie arm64 minbase，供 Android 本地服务（proot）使用。" \
               --prerelease
           fi
-          gh release upload "$tag" dist/* --clobber
+          gh release upload "$tag" \
+            "dist/$ASSET_NAME" \
+            "dist/SHA256SUMS" \
+            "dist/rootfs-info.json" \
+            --clobber

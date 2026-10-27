@@ -9,7 +9,7 @@ import java.io.FileOutputStream
 /**
  * APK 内置 rootfs 的安装与完整性检查。
  *
- * 默认不解压：第一次点「启动本地服务」时才从 assets 取出 `rootfs-arm64-v8a.tar.zst`
+ * 默认不解压：第一次点「启动本地服务」时才从 assets 取出 `rootfs-arm64-v8a.tar.xz`
  * 解压到 `filesDir/local-service/rootfs/<version>`。之后每次启动只做标记 +
  * 关键文件检查；标记缺失、版本不符或目录损坏都会重新解压。
  *
@@ -98,7 +98,7 @@ object BundledRootfs {
         tmp.mkdirs()
         LocalServicePaths.installMarker(context).delete()
 
-        val cached = File(context.cacheDir, "rootfs-${info.version}.tar.zst")
+        val cached = File(context.cacheDir, "rootfs-${info.version}.tar.xz")
         try {
             onMessage("正在准备本地环境…")
             copyAsset(context, info.asset, cached)

@@ -2,7 +2,7 @@
 """
 EdgeCube 原生依赖组装工具（V2）
 
-把 Termux 源码构建产物（proot/busybox/tar/zstd 及依赖的 .deb）组装成
+把 Termux 源码构建产物（proot/busybox/tar/zstd/xz 及依赖的 .deb）组装成
 Android arm64-v8a 的 jniLibs 目录。V2 的 daemon 跑在内置 rootfs 里，
 不再需要 V1 的 PHP CLI。
 
@@ -38,6 +38,8 @@ BINARIES = {
     "bin/busybox": "lib__bin__busybox__.so",
     "bin/tar": "lib__bin__tar__.so",
     "bin/zstd": "lib__bin__zstd__.so",
+    # 内置 rootfs 是 tar.xz：bootstrap 里的 GNU tar 靠这个 xz 解压缩。
+    "bin/xz": "lib__bin__xz__.so",
 }
 
 # 动态库：Termux 包内路径 -> jniLibs 文件名。

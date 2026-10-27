@@ -10,7 +10,7 @@ fail() {
 echo "=== [1/4] 修改 apt 源 ==="
 # 此刻 rootfs 里还没有 CA 证书，HTTPS 源不可用，先用默认 HTTP 源装 ca-certificates。
 apt-get update
-apt-get install -y ca-certificates
+apt-get install -y ca-certificates openssl
 
 cat > /etc/apt/sources.list <<'EOF'
 deb https://deb.debian.org/debian trixie main contrib non-free non-free-firmware

@@ -7,7 +7,7 @@ import java.io.File
 /**
  * proot 工具链的「正常 Linux 路径」视图。
  *
- * proot/busybox/tar/zstd 与 loader 以 `.so` 伪装可执行文件的形式打进
+ * proot/busybox/tar/zstd/xz 与 loader 以 `.so` 伪装可执行文件的形式打进
  * `jniLibs/arm64-v8a/`，安装后位于 `applicationInfo.nativeLibraryDir`。
  * 命名约定沿用 V1：`lib__bin__<name>__.so` 对应 `/bin/<name>`，
  * `lib__lib__<soname>__.so` 对应 `/lib/<soname>`。
@@ -18,7 +18,7 @@ import java.io.File
 object ProotBootstrap {
 
     /** bootstrap 布局变化时递增，触发老版本重建。 */
-    private const val BOOTSTRAP_VERSION = 1
+    private const val BOOTSTRAP_VERSION = 2
 
     private const val PROOT_VARIANT = "proot-classic"
 
@@ -60,6 +60,8 @@ object ProotBootstrap {
             "sh" to "lib__bin__busybox__.so",
             "tar" to "lib__bin__tar__.so",
             "zstd" to "lib__bin__zstd__.so",
+            // rootfs 是 tar.xz：bootstrap/bin 里要有 xz，guest 外的 tar 才能自动解压。
+            "xz" to "lib__bin__xz__.so",
         )
         for ((linkName, soName) in binEntries) {
             symlink(File(binDir, linkName), File(nativeDir, soName))
