@@ -36,7 +36,7 @@ val nativeDepsLocalZipEnv = providers.environmentVariable("EDGECUBE_NATIVE_DEPS_
 
 val fetchNativeDeps = tasks.register("fetchNativeDeps") {
     group = "build"
-    description = "下载并校验原生依赖包（proot/busybox/tar/zstd/xz）"
+    description = "下载并校验原生依赖包（proot/tar/xz）"
 
     val props = Properties()
     if (nativeDepsPropertiesFile.isFile) {
@@ -102,9 +102,7 @@ val fetchNativeDeps = tasks.register("fetchNativeDeps") {
 
         val required = listOf(
             "lib__bin__proot-classic__.so",
-            "lib__bin__busybox__.so",
             "lib__bin__tar__.so",
-            "lib__bin__zstd__.so",
             "lib__bin__xz__.so",
             "libproot-loader-aarch64-5.1.107-68.so",
         )

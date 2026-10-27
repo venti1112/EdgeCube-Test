@@ -1,12 +1,16 @@
 name: 构建原生依赖
 
-# 从源码构建 proot 工具链（proot/busybox/tar/zstd/xz 及依赖），
+# 从源码构建 proot 工具链（proot/tar/xz 及依赖），
 # 组装为 arm64-v8a 的 jniLibs 包并发布到 GitHub Release。
 # APK 构建（android.yml）从该 Release 下载并校验 sha256。
 #
 # V2 的 daemon 跑在内置 rootfs 里（Debian glibc），不再需要 V1 的 PHP CLI。
-# liblzma 单独列进构建清单：内置 rootfs 是 tar.xz，设备侧解压要用它的子包
-# xz-utils 里的 bin/xz。
+# 工具链只留 proot + tar + xz：tar 的依赖（libacl/libattr/libandroid-selinux/
+# libpcre2/libiconv）由 build-package.sh 自动带入；busybox 不再需要——guest 里
+# 有 Debian 的 dash 与 coreutils；zstd 也不再需要——rootfs 改用 xz，daemon 的
+# tar.zst 备份由 Rust crate 处理，不调用外部压缩程序。
+# liblzma 要单独列进构建清单：bin/xz 来自它的子包 xz-utils，而 GNU tar 是按
+# 后缀 exec 外部 xz 来解压的。
 
 on:
   workflow_dispatch:
@@ -56,7 +60,7 @@ jobs:
             docker push "$image" || echo "::warning::构建器镜像推送失败，本次仍使用本地镜像"
           fi
 
-      - name: 从源码构建 proot/busybox/tar/zstd/liblzma
+      - name: 从源码构建 proot/tar/liblzma
         run: |
           export TERMUX_BUILDER_IMAGE_NAME="$BUILDER_IMAGE"
           export CONTAINER_NAME=edgecube-termux-builder
@@ -64,7 +68,7 @@ jobs:
           # 装在 /home/builder/lib，properties.sh 按 $HOME 推导路径，须覆盖 HOME。
           export TERMUX_DOCKER_EXEC_EXTRA_ARGS="--env HOME=/home/builder"
           cd third_party/termux-packages
-          ./scripts/run-docker.sh ./build-package.sh -a aarch64 proot busybox tar zstd liblzma
+          ./scripts/run-docker.sh ./build-package.sh -a aarch64 proot tar liblzma
 
       - name: 上传 .deb 与 loader
         uses: actions/upload-artifact@v6
@@ -151,7 +155,7 @@ jobs:
           else
             gh release create "$RELEASE_TAG" \
               --title "原生依赖 $RELEASE_TAG" \
-              --notes "由 native-deps.yml 从源码构建的 proot 工具链（busybox/tar/zstd/xz）。" \
+              --notes "由 native-deps.yml 从源码构建的 proot 工具链（proot/tar/xz）。" \
               --prerelease
           fi
           gh release upload "$RELEASE_TAG" \

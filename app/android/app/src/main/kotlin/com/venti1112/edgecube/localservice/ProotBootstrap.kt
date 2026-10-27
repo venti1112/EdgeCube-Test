@@ -7,7 +7,7 @@ import java.io.File
 /**
  * proot 工具链的「正常 Linux 路径」视图。
  *
- * proot/busybox/tar/zstd/xz 与 loader 以 `.so` 伪装可执行文件的形式打进
+ * proot/tar/xz 与 loader 以 `.so` 伪装可执行文件的形式打进
  * `jniLibs/arm64-v8a/`，安装后位于 `applicationInfo.nativeLibraryDir`。
  * 命名约定沿用 V1：`lib__bin__<name>__.so` 对应 `/bin/<name>`，
  * `lib__lib__<soname>__.so` 对应 `/lib/<soname>`。
@@ -56,10 +56,7 @@ object ProotBootstrap {
 
         val binEntries = listOf(
             "proot" to "lib__bin__${PROOT_VARIANT}__.so",
-            "busybox" to "lib__bin__busybox__.so",
-            "sh" to "lib__bin__busybox__.so",
             "tar" to "lib__bin__tar__.so",
-            "zstd" to "lib__bin__zstd__.so",
             // rootfs 是 tar.xz：bootstrap/bin 里要有 xz，guest 外的 tar 才能自动解压。
             "xz" to "lib__bin__xz__.so",
         )
@@ -79,15 +76,12 @@ object ProotBootstrap {
 
         val libEntries = listOf(
             "libtalloc.so.2" to "lib__lib__libtalloc.so.2.4.4__.so",
-            "libzstd.so.1" to "lib__lib__libzstd.so.1.5.7__.so",
-            "libz.so.1" to "lib__lib__libz.so.1.3.2__.so",
             "liblzma.so.5" to "lib__lib__liblzma.so.5.8.3__.so",
             "libacl.so" to "lib__lib__libacl.so__.so",
             "libattr.so" to "lib__lib__libattr.so__.so",
             "libpcre2-8.so" to "lib__lib__libpcre2-8.so__.so",
             "libiconv.so" to "lib__lib__libiconv.so__.so",
             "libandroid-selinux.so" to "lib__lib__libandroid-selinux.so__.so",
-            "libbusybox.so.1.37.0" to "lib__lib__libbusybox.so.1.37.0__.so",
         )
         for ((linkName, soName) in libEntries) {
             symlink(File(libDir, linkName), File(nativeDir, soName))

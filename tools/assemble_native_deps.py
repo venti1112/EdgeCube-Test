@@ -2,7 +2,7 @@
 """
 EdgeCube 原生依赖组装工具（V2）
 
-把 Termux 源码构建产物（proot/busybox/tar/zstd/xz 及依赖的 .deb）组装成
+把 Termux 源码构建产物（proot/tar/xz 及依赖的 .deb）组装成
 Android arm64-v8a 的 jniLibs 目录。V2 的 daemon 跑在内置 rootfs 里，
 不再需要 V1 的 PHP CLI。
 
@@ -35,9 +35,7 @@ TERMUX_PREFIX = Path("data/data/com.termux/files/usr")
 # 可执行文件：Termux 包内路径 -> jniLibs 文件名。
 BINARIES = {
     "bin/proot": "lib__bin__proot-classic__.so",
-    "bin/busybox": "lib__bin__busybox__.so",
     "bin/tar": "lib__bin__tar__.so",
-    "bin/zstd": "lib__bin__zstd__.so",
     # 内置 rootfs 是 tar.xz：bootstrap 里的 GNU tar 靠这个 xz 解压缩。
     "bin/xz": "lib__bin__xz__.so",
 }
@@ -47,15 +45,12 @@ BINARIES = {
 # 这里与 ProotBootstrap.kt 需要同步修改（脚本会在此处报错提醒）。
 LIBRARIES = {
     "lib/libtalloc.so.2.4.4": "lib__lib__libtalloc.so.2.4.4__.so",
-    "lib/libzstd.so.1.5.7": "lib__lib__libzstd.so.1.5.7__.so",
-    "lib/libz.so.1.3.2": "lib__lib__libz.so.1.3.2__.so",
     "lib/liblzma.so.5.8.3": "lib__lib__liblzma.so.5.8.3__.so",
     "lib/libacl.so": "lib__lib__libacl.so__.so",
     "lib/libattr.so": "lib__lib__libattr.so__.so",
     "lib/libpcre2-8.so": "lib__lib__libpcre2-8.so__.so",
     "lib/libiconv.so": "lib__lib__libiconv.so__.so",
     "lib/libandroid-selinux.so": "lib__lib__libandroid-selinux.so__.so",
-    "lib/libbusybox.so.1.37.0": "lib__lib__libbusybox.so.1.37.0__.so",
 }
 
 # proot build.sh 的 post_make_install 直接输出到 Termux output 目录。
