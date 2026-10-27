@@ -1,23 +1,27 @@
 name: 构建 rootfs
 
-# 构建内置本地环境（Debian 13 trixie arm64 minbase），打包成 APK 资产用的 tar.zst。
+# 构建内置本地环境（Debian 13 trixie arm64 minbase），打包成多种压缩格式做体积对比。
+# 同一份 rootfs 分别以最大压缩率产出 tar.zst / tar.xz / tar.gz / tar.bz2 / tar.lz4 /
+# tar.br / tar.lz / tar.7z，Step Summary 与 rootfs-sizes.tsv 给出排序结果，便于挑选
+# 后续真正进 APK 的格式。rootfs-info.json 记录所有产物及校验和。
 # 产物发布到 GitHub Release；app/android/rootfs.properties 锁定 tag / sha256 / version。
 #
-# 构建策略（参考 EdgeCubePackage-rootfs 的两阶段 debootstrap 做法）：
-#   - `--foreign` 第一阶段只下载并展开基础系统，第二阶段在 chroot 里跑 postinst；
-#     chroot 前 bind /proc、/sys 并注入 qemu-aarch64-static，避免 adduser 等
-#     维护脚本因缺少伪文件系统而失败。
-#   - apt 源与 V1 独立仓库的 build-rootfs.yml 一致：先用 debootstrap 默认 HTTP 源
-#     装 ca-certificates，再覆盖为 HTTPS 全组件源（main/contrib/non-free/
-#     non-free-firmware + updates/backports/security），随后 full-upgrade。
-#   - 不在安装后删任何包内文件：debootstrap 第一阶段会用 dpkg-deb + tar 直接展开
-#     required 包，绕过 dpkg 的文件过滤；此时再用 rm 裁掉文档/语言包只会留下
-#     「磁盘有文件、dpkg 不登记」的孤儿文件，后续 apt 操作会让 rootfs 越来越乱。
-#     因此镜像保持 dpkg 记录与磁盘完全一致，只通过 apt-get clean / autoremove
-#     清理包管理器自己的缓存与无用依赖。
-#   - apt 索引缓存 bind 到 runner 临时目录，rootfs 内不落任何列表文件，
-#     无需事后清理。
-#   - 安装后 full-upgrade 取齐安全更新，并要求 dpkg --audit 无输出。
+# 分工（主机侧刻意保持极简）：
+#   - 本工作流只做三件事：debootstrap、进 chroot 跑配置脚本、打包发布。rootfs 内的
+#     全部配置（apt 源、full-upgrade、装库、清理、自检）都在 scripts/rootfs/config.sh
+#     里完成；改配置只改那个脚本，不动工作流。
+#   - runner 用 ubuntu-26.04-arm（原生 arm64）：不需要 qemu-user-static 与 binfmt，
+#     debootstrap 一次跑完（跨架构才需要的 --foreign 两阶段省掉），chroot 里的
+#     apt/dpkg 也是原生速度。
+#   - 只做 Debian 13 trixie，不提供版本选项：多一条版本分支就多一组没验证过的
+#     包名与 glibc 组合（libssl3t64、daemon 构建镜像的 glibc 下限都跟版本绑定）。
+#   - 不 rm rootfs 里的任何文件：debootstrap 展开 required 包走 dpkg-deb + tar，
+#     绕过 dpkg 的文件过滤，此时裁掉文件只会留下「磁盘有文件、dpkg 不登记」的孤儿
+#     文件，后续 apt 操作会让 rootfs 越来越乱。清理全部交给配置脚本里的
+#     apt-get clean / autoremove --purge，并要求 dpkg --audit 无输出。
+#   - chroot 前 bind /proc、/sys：adduser 一类维护脚本离开 /proc 会失败；apt 索引
+#     bind 到 runner 临时目录，rootfs 内不落任何列表文件。
+#   - 配置脚本放在 rootfs 的 /tmp 里执行，随打包时的 /tmp 排除项一起留在镜像外。
 #
 # rootfs 默认不在 APK 里解压：首次启动本地服务时由 Kotlin 侧解压到 filesDir，
 # 因此这里只求「能跑 daemon + 有 CA 证书」；不为体积牺牲包状态一致性。
@@ -35,11 +39,6 @@ on:
         type: string
         default: trixie-minbase-r1
         required: true
-      suite:
-        description: "Debian 版本（不能比 android.yml 的 daemon 构建镜像更旧）"
-        type: string
-        default: trixie
-        required: true
       publish:
         description: "发布到 GitHub Release（关闭时仅保留 Actions 产物，便于验证）"
         type: boolean
@@ -49,198 +48,145 @@ permissions:
   contents: write
 
 env:
-  ASSET_NAME: edgecube-rootfs-arm64-v8a.tar.zst
+  ASSET_BASE: edgecube-rootfs-arm64-v8a
 
 jobs:
   rootfs:
     name: 构建 Debian 本地环境
-    runs-on: ubuntu-24.04
+    # 原生 arm64：arm64 的 apt/dpkg 直接跑，不经过 qemu 模拟
+    runs-on: ubuntu-26.04-arm
     env:
       RELEASE_TAG: ${{ inputs.tag }}
       ROOTFS_VERSION: ${{ inputs.version }}
-      DEBIAN_SUITE: ${{ inputs.suite }}
     steps:
       - uses: actions/checkout@v5
 
-      - name: 安装 debootstrap 与打包工具
+      - name: 安装 debootstrap 与压缩工具
         run: |
           sudo apt-get update
-          # debian-archive-keyring 提供 trixie 的归档签名密钥
-          sudo apt-get install -y debootstrap qemu-user-static zstd debian-archive-keyring
+          sudo apt-get install -y             debootstrap debian-archive-keyring             zstd xz-utils gzip bzip2 lz4 brotli lzip p7zip-full
 
-      - name: 启用 arm64 binfmt
-        run: |
-          # github runner 是 x86_64；第二阶段以及 chroot 校验都要能执行 arm64。
-          docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
-          ls /proc/sys/fs/binfmt_misc/qemu-aarch64
-
-      - name: debootstrap 第一阶段（--foreign）
+      - name: debootstrap（arm64 minbase）
         run: |
           set -euo pipefail
-
-          # runner 上的 debootstrap 可能没有 trixie 脚本，复用 sid（与 V1 工作流一致）
-          if [ ! -f "/usr/share/debootstrap/scripts/$DEBIAN_SUITE" ]; then
-            sudo ln -sf sid "/usr/share/debootstrap/scripts/$DEBIAN_SUITE"
-          fi
-
           rootfs="$RUNNER_TEMP/rootfs"
           sudo mkdir -p "$rootfs"
           sudo debootstrap \
             --arch=arm64 \
             --variant=minbase \
             --components=main \
-            --foreign \
-            "$DEBIAN_SUITE" "$rootfs" http://deb.debian.org/debian
+            trixie \
+            "$rootfs" \
+            http://deb.debian.org/debian
           echo "ROOTFS_DIR=$rootfs" >> "$GITHUB_ENV"
-
-          # 第二阶段 chroot 执行 arm64 程序用；打包时排除，不进产物。
-          sudo cp /usr/bin/qemu-aarch64-static "$rootfs/usr/bin/"
           sudo du -sh "$rootfs"
 
-      - name: debootstrap 第二阶段（chroot 内配置）
+      - name: 配置 rootfs（chroot 内执行 scripts/rootfs/config.sh）
         run: |
           set -euo pipefail
-          # postinst 里的 adduser/base-passwd 等依赖 /proc；resolv.conf 供后续 apt 用。
-          sudo cp /etc/resolv.conf "$ROOTFS_DIR/etc/resolv.conf"
-          sudo mkdir -p "$ROOTFS_DIR/proc" "$ROOTFS_DIR/sys"
+
+          sudo mkdir -p "$ROOTFS_DIR/proc" "$ROOTFS_DIR/sys" "$ROOTFS_DIR/var/lib/apt/lists" "$RUNNER_TEMP/apt-lists"
           sudo mount --bind /proc "$ROOTFS_DIR/proc"
           sudo mount --bind /sys "$ROOTFS_DIR/sys"
-          trap 'sudo umount "$ROOTFS_DIR/proc" "$ROOTFS_DIR/sys" 2>/dev/null || true' EXIT
-          sudo chroot "$ROOTFS_DIR" /debootstrap/debootstrap --second-stage
+          sudo mount --bind "$RUNNER_TEMP/apt-lists" "$ROOTFS_DIR/var/lib/apt/lists"
 
-      - name: 安装基础组件并升级
+          sudo cp /etc/resolv.conf "$ROOTFS_DIR/etc/resolv.conf"
+          sudo cp scripts/rootfs/config.sh "$ROOTFS_DIR/tmp/rootfs-config.sh"
+
+          sudo chroot "$ROOTFS_DIR" bash /tmp/rootfs-config.sh
+
+      - name: 打包多种压缩格式（全部最大压缩率）与校验和
         run: |
           set -euo pipefail
-          sudo cp /etc/resolv.conf "$ROOTFS_DIR/etc/resolv.conf"
-          sudo mkdir -p "$ROOTFS_DIR/proc" "$ROOTFS_DIR/sys" "$ROOTFS_DIR/var/lib/apt/lists"
 
-          # apt 索引写到 runner 临时目录，rootfs 内不落列表文件，省掉事后清理。
-          lists="$RUNNER_TEMP/apt-lists"
-          mkdir -p "$lists"
-
-          sudo mount --bind /proc "$ROOTFS_DIR/proc"
-          sudo mount --bind /sys "$ROOTFS_DIR/sys"
-          sudo mount --bind "$lists" "$ROOTFS_DIR/var/lib/apt/lists"
-          trap 'sudo umount "$ROOTFS_DIR/var/lib/apt/lists" "$ROOTFS_DIR/sys" "$ROOTFS_DIR/proc" 2>/dev/null || true' EXIT
-
-          apt_run() {
-            sudo chroot "$ROOTFS_DIR" env DEBIAN_FRONTEND=noninteractive apt-get "$@"
-          }
-          install_pkgs() {
-            apt_run install -y --no-install-recommends "$@" || {
-              echo "--- 首次安装失败，先 dpkg --configure -a 再重试 ---"
-              sudo chroot "$ROOTFS_DIR" env DEBIAN_FRONTEND=noninteractive dpkg --configure -a
-              apt_run install -y --no-install-recommends "$@"
-            }
-          }
-
-          apt_run update
-          # debootstrap 默认是 HTTP 源；先装 ca-certificates，才能切到 HTTPS 源。
-          install_pkgs ca-certificates
-
-          # 覆盖为完整的 HTTPS 源（与 V1 独立仓库的 build-rootfs.yml 一致）：
-          # 全组件 + updates / backports / security。
-          sudo tee "$ROOTFS_DIR/etc/apt/sources.list" >/dev/null <<EOF
-          deb https://deb.debian.org/debian $DEBIAN_SUITE main contrib non-free non-free-firmware
-          deb https://deb.debian.org/debian $DEBIAN_SUITE-updates main contrib non-free non-free-firmware
-          deb https://deb.debian.org/debian $DEBIAN_SUITE-backports main contrib non-free non-free-firmware
-          deb https://security.debian.org/debian-security $DEBIAN_SUITE-security main contrib non-free non-free-firmware
-          EOF
-          sudo chown root:root "$ROOTFS_DIR/etc/apt/sources.list"
-
-          apt_run update
-          apt_run full-upgrade -y --no-install-recommends
-          # daemon 运行所需的基础库；libssl 从 trixie 起改名为 libssl3t64（time64 迁移）。
-          case "$DEBIAN_SUITE" in
-            trixie|forky|sid) ssl_pkg=libssl3t64 ;;
-            *) ssl_pkg=libssl3 ;;
-          esac
-          install_pkgs "$ssl_pkg" zlib1g libstdc++6 libgcc-s1 liblzma5 libbz2-1.0 tzdata
-          apt_run autoremove --purge -y
-
-      - name: 校验 rootfs 完整性
-        run: |
-          set -euo pipefail
-          sudo cp /etc/resolv.conf "$ROOTFS_DIR/etc/resolv.conf"
-          sudo mkdir -p "$ROOTFS_DIR/proc" "$ROOTFS_DIR/sys"
-          sudo mount --bind /proc "$ROOTFS_DIR/proc"
-          sudo mount --bind /sys "$ROOTFS_DIR/sys"
-          trap 'sudo umount "$ROOTFS_DIR/proc" "$ROOTFS_DIR/sys" 2>/dev/null || true' EXIT
-
-          # 不允许存在半安装、半配置的包
-          audit=$(sudo chroot "$ROOTFS_DIR" dpkg --audit)
-          if [[ -n "$audit" ]]; then
-            echo "::error::dpkg --audit 报告异常：$audit"
-            exit 1
-          fi
-
-          # 与 BundledRootfs.kt 的 sentinel 列表保持一致，改动时两处同步。
-          for path in \
-            usr/bin/env \
-            usr/bin/dash \
-            etc/os-release \
-            usr/lib/aarch64-linux-gnu/libc.so.6 \
-            etc/ssl/certs/ca-certificates.crt
-          do
-            if ! sudo test -e "$ROOTFS_DIR/$path"; then
-              echo "::error::rootfs 缺少必需路径：$path"
-              exit 1
-            fi
-          done
-          if ! sudo grep -q '^ID=debian' "$ROOTFS_DIR/etc/os-release"; then
-            echo "::error::rootfs 的 os-release 不是 Debian"
-            exit 1
-          fi
-
-          sudo chroot "$ROOTFS_DIR" /usr/bin/env /bin/dash -c 'echo "rootfs shell OK"'
-          echo "=== glibc 版本（不能低于 android.yml 的 daemon 构建镜像）==="
-          # sed 读完整个输出，避免 head 提前退出在 pipefail 下触发 SIGPIPE。
-          sudo chroot "$ROOTFS_DIR" /usr/lib/aarch64-linux-gnu/libc.so.6 | sed -n '1p'
-          # -x 只统计 rootfs 自身文件系统：此时 /proc、/sys 已 bind mount 进来，
-          # 遍历 /proc 会读到随时消失的进程 fd 路径，du 会因此报错退出。
+          sudo umount "$ROOTFS_DIR/var/lib/apt/lists" "$ROOTFS_DIR/sys" "$ROOTFS_DIR/proc" 2>/dev/null || true
           sudo du -shx "$ROOTFS_DIR"
 
-      - name: 打包 tar.zst 与校验和
-        run: |
-          set -euo pipefail
-          # 归档缓存是包管理器数据，用 apt 自己的命令清理
-          sudo chroot "$ROOTFS_DIR" apt-get clean
-
           mkdir -p dist
-          # 以下排除项都不是包内文件：
-          #   dev/proc/sys 由 proot 运行时 bind；qemu 仅供本次 chroot；
-          #   resolv.conf 由 App 安装时写入；tmp/apt 缓存无需随镜像分发。
-          sudo tar --numeric-owner -cpf - \
-            --exclude=./dev \
-            --exclude=./proc \
-            --exclude=./sys \
-            --exclude=./usr/bin/qemu-aarch64-static \
-            --exclude=./etc/resolv.conf \
-            --exclude='./tmp/*' \
-            --exclude='./var/tmp/*' \
-            --exclude='./var/cache/apt/archives/*' \
-            -C "$ROOTFS_DIR" . |
-            zstd -19 -T0 -o "dist/$ASSET_NAME"
+          TAR_EXCLUDES=(
+            --exclude=./dev
+            --exclude=./proc
+            --exclude=./sys
+            --exclude=./etc/resolv.conf
+            --exclude=./tmp/*
+            --exclude=./var/lib/apt/lists/*
+          )
 
-          cd dist
-          sha256sum "$ASSET_NAME" | tee SHA256SUMS
-          cat > rootfs-info.json <<EOF
-          {
-            "version": "$ROOTFS_VERSION",
-            "suite": "$DEBIAN_SUITE",
-            "architecture": "arm64",
-            "asset": "$ASSET_NAME",
-            "sha256": "$(cut -d' ' -f1 SHA256SUMS)"
+          # 先产出一份未压缩 tar，各格式都吃同一份输入，保证对比公平
+          BASE_TAR="$RUNNER_TEMP/rootfs.tar"
+          sudo tar --numeric-owner -cpf "$BASE_TAR" "${TAR_EXCLUDES[@]}" -C "$ROOTFS_DIR" .
+
+          tar_size=$(stat -c %s "$BASE_TAR")
+          echo "未压缩 tar: $tar_size bytes ($(du -h "$BASE_TAR" | cut -f1))"
+
+          compress_one() {
+            # $1 后缀（不含点）  $2.. 压缩命令（从 stdin 读，输出到 $OUT）
+            local ext="$1"; shift
+            local out="dist/$ASSET_BASE.tar.$ext"
+            echo ">>> 生成 $out"
+            "$@" < "$BASE_TAR" > "$out"
           }
-          EOF
-          ls -lh "$ASSET_NAME"
+
+          # ---- 各格式：能开多大开多大 ----
+          compress_one zst  zstd -19 --ultra -22 -T0 -q
+          compress_one xz   xz -9e -T0
+          compress_one gz    gzip -9 -n -c
+          compress_one bz2   bzip2 -9 -c
+          compress_one lz4   lz4 -12 -q -c
+          compress_one br    brotli -q 11 -c
+          compress_one lz    lzip -9 -c
+          # 7z 不走流式：直接压 tar 文件本身（solid 对单个大 tar 影响不大，默认即可）
+          7z a -t7z -mx=9 -m0=lzma2 "dist/$ASSET_BASE.tar.7z" "$BASE_TAR" >/dev/null
+
+          # 逐个校验和
+          cd dist
+          sha256sum "$ASSET_BASE".tar.* | tee SHA256SUMS
+
+          # 体积排行表（升序）
+          echo "format	size_bytes	size_human	sha256" > rootfs-sizes.tsv
+          for f in "$ASSET_BASE".tar.*; do
+            sz=$(stat -c %s "$f")
+            printf '%s	%s	%s	%s\n' \
+              "${f#"$ASSET_BASE".tar.}" "$sz" "$(numfmt --to=iec "$sz")" \
+              "$(sha256sum "$f" | cut -d' ' -f1)" >> rootfs-sizes.tsv
+          done
+          sort -t$'\t' -k2,2n rootfs-sizes.tsv -o rootfs-sizes.tsv
+
+          # 生成汇总 info（所有产物全列进去）
           {
-            echo "### rootfs 已生成"
+            echo '{'
+            echo "  \"version\": \"$ROOTFS_VERSION\","
+            echo '  "suite": "trixie",'
+            echo '  "architecture": "arm64",'
+            echo "  \"uncompressed_tar_bytes\": $tar_size,"
+            echo '  "assets": ['
+            first=1
+            for f in "$ASSET_BASE".tar.*; do
+              [ $first -eq 0 ] && echo ','
+              first=0
+              sz=$(stat -c %s "$f")
+              printf '    {"format": "%s", "file": "%s", "bytes": %s, "sha256": "%s"}' \
+                "${f#"$ASSET_BASE".tar.}" "$f" "$sz" "$(sha256sum "$f" | cut -d' ' -f1)"
+            done
+            echo
+            echo '  ]'
+            echo '}'
+          } > rootfs-info.json
+
+          ls -lh "$ASSET_BASE".tar.*
+
+          {
+            echo "### rootfs 已生成（多格式对比，未压缩 tar：$(numfmt --to=iec "$tar_size")）"
             echo
             echo "- 标签：\`$RELEASE_TAG\`"
-            echo "- 版本：\`$ROOTFS_VERSION\`（Debian $DEBIAN_SUITE arm64 minbase）"
-            echo "- 文件：\`$ASSET_NAME\`"
-            echo "- SHA256：\`$(cut -d' ' -f1 SHA256SUMS)\`"
+            echo "- 版本：\`$ROOTFS_VERSION\`（Debian trixie arm64 minbase）"
+            echo
+            echo "| 格式 | 大小 | 相比未压缩 | SHA256 |"
+            echo "| --- | ---: | ---: | --- |"
+            tail -n +2 rootfs-sizes.tsv | while IFS=$'\t' read -r fmt sz human sha; do
+              pct=$(awk -v a="$sz" -v b="$tar_size" 'BEGIN{printf "%.1f%%", 100*a/b}')
+              echo "| $fmt | $human | $pct | \`${sha:0:16}…\` |"
+            done
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: 上传 Actions 产物
@@ -261,12 +207,7 @@ jobs:
           else
             gh release create "$tag" \
               --title "本地环境 $tag" \
-              --notes "Debian $DEBIAN_SUITE arm64 minbase，供 Android 本地服务（proot）使用。" \
+              --notes "Debian trixie arm64 minbase，供 Android 本地服务（proot）使用。" \
               --prerelease
           fi
-          gh release upload "$tag" \
-            "dist/$ASSET_NAME" \
-            "dist/SHA256SUMS" \
-            "dist/rootfs-info.json" \
-            --clobber
-
+          gh release upload "$tag" dist/* --clobber
