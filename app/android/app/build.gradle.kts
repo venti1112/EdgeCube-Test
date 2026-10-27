@@ -116,7 +116,7 @@ val fetchNativeDeps = tasks.register("fetchNativeDeps") {
     }
 }
 
-// ─── 内置 rootfs：Debian 12 arm64 minbase（由「构建 rootfs」工作流产出）───
+// ─── 内置 rootfs：Debian 13 trixie arm64 minbase（由「构建 rootfs」工作流产出）───
 // 默认不解压，APK 只带压缩包；首次启动本地服务时由 Kotlin 侧解压到 filesDir。
 val rootfsPropertiesFile = rootProject.file("rootfs.properties")
 val rootfsAssetsDir = layout.buildDirectory.dir("rootfs-assets").get().asFile

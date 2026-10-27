@@ -1,12 +1,15 @@
 name: 构建 rootfs
 
-# 构建内置本地环境（Debian arm64 minbase），打包成 APK 资产用的 tar.zst。
+# 构建内置本地环境（Debian 13 trixie arm64 minbase），打包成 APK 资产用的 tar.zst。
 # 产物发布到 GitHub Release；app/android/rootfs.properties 锁定 tag / sha256 / version。
 #
 # 构建策略（参考 EdgeCubePackage-rootfs 的两阶段 debootstrap 做法）：
 #   - `--foreign` 第一阶段只下载并展开基础系统，第二阶段在 chroot 里跑 postinst；
 #     chroot 前 bind /proc、/sys 并注入 qemu-aarch64-static，避免 adduser 等
 #     维护脚本因缺少伪文件系统而失败。
+#   - apt 源与 V1 独立仓库的 build-rootfs.yml 一致：先用 debootstrap 默认 HTTP 源
+#     装 ca-certificates，再覆盖为 HTTPS 全组件源（main/contrib/non-free/
+#     non-free-firmware + updates/backports/security），随后 full-upgrade。
 #   - 不在安装后删任何包内文件：debootstrap 第一阶段会用 dpkg-deb + tar 直接展开
 #     required 包，绕过 dpkg 的文件过滤；此时再用 rm 裁掉文档/语言包只会留下
 #     「磁盘有文件、dpkg 不登记」的孤儿文件，后续 apt 操作会让 rootfs 越来越乱。
@@ -30,12 +33,12 @@ on:
       version:
         description: "rootfs 版本号（写入 rootfs-info.json，与 app 侧对应）"
         type: string
-        default: bookworm-minbase-r1
+        default: trixie-minbase-r1
         required: true
       suite:
         description: "Debian 版本（不能比 android.yml 的 daemon 构建镜像更旧）"
         type: string
-        default: bookworm
+        default: trixie
         required: true
       publish:
         description: "发布到 GitHub Release（关闭时仅保留 Actions 产物，便于验证）"
@@ -62,7 +65,8 @@ jobs:
       - name: 安装 debootstrap 与打包工具
         run: |
           sudo apt-get update
-          sudo apt-get install -y debootstrap qemu-user-static zstd
+          # debian-archive-keyring 提供 trixie 的归档签名密钥
+          sudo apt-get install -y debootstrap qemu-user-static zstd debian-archive-keyring
 
       - name: 启用 arm64 binfmt
         run: |
@@ -73,6 +77,12 @@ jobs:
       - name: debootstrap 第一阶段（--foreign）
         run: |
           set -euo pipefail
+
+          # runner 上的 debootstrap 可能没有 trixie 脚本，复用 sid（与 V1 工作流一致）
+          if [ ! -f "/usr/share/debootstrap/scripts/$DEBIAN_SUITE" ]; then
+            sudo ln -sf sid "/usr/share/debootstrap/scripts/$DEBIAN_SUITE"
+          fi
+
           rootfs="$RUNNER_TEMP/rootfs"
           sudo mkdir -p "$rootfs"
           sudo debootstrap \
@@ -128,18 +138,24 @@ jobs:
           # debootstrap 默认是 HTTP 源；先装 ca-certificates，才能切到 HTTPS 源。
           install_pkgs ca-certificates
 
-          # 补齐 updates / security 源（与 debootstrap 默认源保持一致，只用 main）。
+          # 覆盖为完整的 HTTPS 源（与 V1 独立仓库的 build-rootfs.yml 一致）：
+          # 全组件 + updates / backports / security。
           sudo tee "$ROOTFS_DIR/etc/apt/sources.list" >/dev/null <<EOF
-          deb https://deb.debian.org/debian $DEBIAN_SUITE main
-          deb https://deb.debian.org/debian $DEBIAN_SUITE-updates main
-          deb https://security.debian.org/debian-security $DEBIAN_SUITE-security main
+          deb https://deb.debian.org/debian $DEBIAN_SUITE main contrib non-free non-free-firmware
+          deb https://deb.debian.org/debian $DEBIAN_SUITE-updates main contrib non-free non-free-firmware
+          deb https://deb.debian.org/debian $DEBIAN_SUITE-backports main contrib non-free non-free-firmware
+          deb https://security.debian.org/debian-security $DEBIAN_SUITE-security main contrib non-free non-free-firmware
           EOF
           sudo chown root:root "$ROOTFS_DIR/etc/apt/sources.list"
 
           apt_run update
           apt_run full-upgrade -y --no-install-recommends
-          # daemon 运行所需的基础库与 CA 证书；其余为 minbase 已含的常用运行库。
-          install_pkgs libssl3 zlib1g libstdc++6 libgcc-s1 liblzma5 libbz2-1.0 tzdata
+          # daemon 运行所需的基础库；libssl 从 trixie 起改名为 libssl3t64（time64 迁移）。
+          case "$DEBIAN_SUITE" in
+            trixie|forky|sid) ssl_pkg=libssl3t64 ;;
+            *) ssl_pkg=libssl3 ;;
+          esac
+          install_pkgs "$ssl_pkg" zlib1g libstdc++6 libgcc-s1 liblzma5 libbz2-1.0 tzdata
           apt_run autoremove --purge -y
 
       - name: 校验 rootfs 完整性
@@ -177,7 +193,7 @@ jobs:
           fi
 
           sudo chroot "$ROOTFS_DIR" /usr/bin/env /bin/dash -c 'echo "rootfs shell OK"'
-          echo "=== glibc 版本（不能高于 android.yml 的 daemon 构建镜像）==="
+          echo "=== glibc 版本（不能低于 android.yml 的 daemon 构建镜像）==="
           # sed 读完整个输出，避免 head 提前退出在 pipefail 下触发 SIGPIPE。
           sudo chroot "$ROOTFS_DIR" /usr/lib/aarch64-linux-gnu/libc.so.6 | sed -n '1p'
           sudo du -sh "$ROOTFS_DIR"

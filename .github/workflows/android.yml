@@ -2,9 +2,9 @@ name: 构建 APK
 
 # 依赖两个预构建资产（都发布在本仓库的 GitHub Release）：
 #   native-deps.yml -> native-deps-v2（proot 工具链）
-#   rootfs.yml      -> rootfs-v2-r1（Debian arm64 本地环境）
+#   rootfs.yml      -> rootfs-v2-r1（Debian 13 trixie arm64 本地环境）
 # daemon 在本工作流里用 Debian bookworm 容器交叉编译（glibc 2.36），
-# 与内置 rootfs 的 glibc 对齐。
+# 不高于内置 rootfs（trixie，2.41）的 glibc，可直接在 proot 中运行。
 #
 # 签名密钥放在 Actions Secrets：
 #   ANDROID_KEYSTORE_B64   base64 编码的 .jks
@@ -86,8 +86,9 @@ jobs:
       - name: 构建 daemon（Debian bookworm，aarch64）
         run: |
           set -euo pipefail
-          # 必须在 Debian 12 里编译：宿主的 glibc（约 2.44）比 rootfs 的 2.36 新，
-          # 直接交叉编译出的二进制在 proot 里会因为找不到 GLIBC_2.xx 起不来。
+          # 必须在 Debian 12 里编译：宿主（Ubuntu 26.04）的 glibc 比 rootfs
+          # （trixie，2.41）新，直接用宿主 glibc 交叉编译出的二进制在 proot 里
+          # 会因为找不到 GLIBC_2.xx 起不来。
           docker run --rm \
             -v "$GITHUB_WORKSPACE":/work \
             -w /work \

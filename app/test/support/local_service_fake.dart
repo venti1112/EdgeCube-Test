@@ -44,7 +44,7 @@ class FakeLocalServicePlatform implements LocalServicePlatform {
         token: token,
         pid: 1234,
         version: version,
-        rootfsVersion: 'bookworm-minbase-r1',
+        rootfsVersion: 'trixie-minbase-r1',
         prepared: true,
       ),
     );
