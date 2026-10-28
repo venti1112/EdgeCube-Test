@@ -93,9 +93,15 @@ jobs:
             bash -c '
               set -euo pipefail
               apt-get update
+              # unrar_sys 直接编译 RAR 的 C++ 源码，交叉构建需要目标平台的 g++，
+              # cc 按 target triple 前缀找 aarch64-linux-gnu-g++。
               apt-get install -y --no-install-recommends \
-                gcc-aarch64-linux-gnu libc6-dev-arm64-cross pkg-config
+                gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+                libc6-dev-arm64-cross pkg-config
               rustup target add aarch64-unknown-linux-gnu
+              # 交叉构建要显式指定目标 linker：默认的 cc 是宿主 x86_64 的 gcc，
+              # 链接阶段会因目标不匹配直接失败。
+              export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
               cargo build --manifest-path daemon/Cargo.toml \
                 --release --target aarch64-unknown-linux-gnu
             '
