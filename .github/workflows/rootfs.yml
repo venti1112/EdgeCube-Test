@@ -84,12 +84,12 @@ jobs:
         run: |
           set -euo pipefail
 
+          mkdir -p "$RUNNER_TEMP/apt-lists"
           sudo mkdir -p "$ROOTFS_DIR/proc" "$ROOTFS_DIR/sys" "$ROOTFS_DIR/var/lib/apt/lists"
           sudo mount --bind /proc "$ROOTFS_DIR/proc"
           sudo mount --bind /sys "$ROOTFS_DIR/sys"
           sudo mount --bind "$RUNNER_TEMP/apt-lists" "$ROOTFS_DIR/var/lib/apt/lists"
 
-          mkdir -p "$RUNNER_TEMP/apt-lists"
           sudo cp /etc/resolv.conf "$ROOTFS_DIR/etc/resolv.conf"
           sudo cp scripts/rootfs/config.sh "$ROOTFS_DIR/tmp/rootfs-config.sh"
 
