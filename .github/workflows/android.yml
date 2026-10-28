@@ -3,7 +3,7 @@ name: 构建 APK
 # 依赖两个预构建资产（都发布在本仓库的 GitHub Release）：
 #   native-deps.yml -> native-deps-v2（proot 工具链）
 #   rootfs.yml      -> rootfs-v2-r1（Debian 13 trixie arm64 本地环境）
-# daemon 在本工作流里用 Debian bookworm 容器交叉编译（glibc 2.36），
+# daemon 在本工作流里用 Debian trixie 容器交叉编译（glibc 2.36），
 # 不高于内置 rootfs（trixie，2.41）的 glibc，可直接在 proot 中运行。
 #
 # 签名密钥放在 Actions Secrets：
@@ -83,16 +83,13 @@ jobs:
           echo "$HOME/flutter/bin" >> "$GITHUB_PATH"
           "$HOME/flutter/bin/flutter" config --no-analytics
 
-      - name: 构建 daemon（Debian bookworm，aarch64）
+      - name: 构建 daemon（Debian trixie，aarch64）
         run: |
           set -euo pipefail
-          # 必须在 Debian 12 里编译：宿主（Ubuntu 26.04）的 glibc 比 rootfs
-          # （trixie，2.41）新，直接用宿主 glibc 交叉编译出的二进制在 proot 里
-          # 会因为找不到 GLIBC_2.xx 起不来。
           docker run --rm \
             -v "$GITHUB_WORKSPACE":/work \
             -w /work \
-            rust:bookworm \
+            rust:trixie \
             bash -c '
               set -euo pipefail
               apt-get update
@@ -103,12 +100,6 @@ jobs:
                 --release --target aarch64-unknown-linux-gnu
             '
           file daemon/target/aarch64-unknown-linux-gnu/release/edgecube-daemon
-          # 记录实际需要的 glibc 版本，方便和 rootfs 对账
-          if command -v readelf >/dev/null; then
-            readelf --version-info \
-              daemon/target/aarch64-unknown-linux-gnu/release/edgecube-daemon |
-              grep -o 'GLIBC_[0-9.]*' | sort -V | tail -1 || true
-          fi
 
       - name: 写入签名配置
         env:
@@ -124,7 +115,7 @@ jobs:
             sed "s|^storeFile=.*|storeFile=$GITHUB_WORKSPACE/app/android/release.jks|" \
             > app/android/key.properties
 
-      - name: 缓存 Gradle 与 Pub
+      - name: 保存构建缓存
         uses: actions/cache@v5
         with:
           path: |
