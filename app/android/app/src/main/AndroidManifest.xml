@@ -10,8 +10,12 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- 读取当前网络的 DNS，写入本地环境（proot rootfs）的 resolv.conf。 -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <!-- Android 17+ 访问本地网络（LAN）的运行时权限； UPnP 网关发现需要。 -->
+    <!-- Android 17+ 访问本地网络（LAN）的运行时权限；连局域网 daemon、UPnP 网关发现都需要。
+         运行时在 MainActivity 里申请，漏了会在 socket 层直接被拒。 -->
     <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
+    <!-- Android 17+ 回环通信权限：targetSdk 37 起访问 127.0.0.1/localhost 必须声明，
+         否则 socket 操作直接 EPERM（本地服务就连不上）。安装时权限，声明即授予。 -->
+    <uses-permission android:name="android.permission.USE_LOOPBACK_INTERFACE" />
     <!-- 前台 Service 保活：让后台运行的服务端进程不被系统轻易回收。 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />

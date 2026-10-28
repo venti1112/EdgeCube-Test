@@ -485,6 +485,16 @@ String describeConnectError(Object error, String target) {
     return '连接 $target 超时，请检查网络或 daemon 是否在运行';
   }
   if (error is WebSocketChannelException) {
+    // 具体原因都在 message 里:平台拦 socket、令牌不对、路径不对原本都长成
+    // 同一句「连不上」,按字符串分一下类,免得排查时白跑。
+    final detail = error.message ?? '';
+    if (detail.contains('Operation not permitted') ||
+        detail.contains('Permission denied')) {
+      return '无法连接到 $target，系统拦截了本地网络访问，请允许 EdgeCube 访问本地网络';
+    }
+    if (detail.contains('was not upgraded to websocket')) {
+      return '访问令牌不正确，或 $target 拒绝了 WebSocket 升级';
+    }
     return '无法连接到 $target，请检查地址与端口，并确认 daemon 已启动';
   }
   return '连接 $target 失败：$error';
